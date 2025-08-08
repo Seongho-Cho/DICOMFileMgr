@@ -1,4 +1,4 @@
-This Python script is designed for processing DICOM files, specifically for extracting and copying the "center slice" of representative series from TOMO (single-slice) images, under certain size constraints (100MB or less). Here's an overview of the code's purpose and functionality:
+This Python script is designed for processing/presentation DICOM files, specifically for extracting and copying the "center slice" of representative series from TOMO (single-slice) images, under certain size constraints (100MB or less). Here's an overview of the code's purpose and functionality:
 
 ### Purpose:
 
