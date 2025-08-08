@@ -49,17 +49,17 @@ def guess_from_series(desc):
     if not desc:
         return None
     s = desc.upper()
-    if re.search(r"\bL\s*CC\b|LCC|LCCID\b", s):
+    if re.search(r"\bL\s*CC\b|LCC\b|LCCID\b", s):
         return "LCC"
-    if re.search(r"\bR\s*CC\b|RCC|RCCID\b", s):
+    if re.search(r"\bR\s*CC\b|RCC\b|RCCID\b", s):
         return "RCC"
-    if re.search(r"\bL\s*MLO\b|LMLO|LMLOID\b", s):
+    if re.search(r"\bL\s*MLO\b|LMLO\b|LMLOID\b", s):
         return "LMLO"
-    if re.search(r"\bR\s*MLO\b|RMLO\b|RLMO|RMLOID\b", s):
+    if re.search(r"\bR\s*MLO\b|RMLO\b|RLMO\b|RMLOID\b", s):
         return "RMLO"  # Normalize RLMO to RMLO
     return None
 
-def classify_view(ds):
+def classify_view(ds, mode="presentation"):
     """
     Laterality (0020,0060) or Image Laterality (0020,0062) + View Position (0018,5101)
     If insufficient, estimate from Series Description (0008,103E).
@@ -73,8 +73,13 @@ def classify_view(ds):
 
     view = normalize_view(get_tag_str(ds, (0x0018, 0x5101)))
 
-    if laterality and view in ("CC", "MLO"):
-        return f"{laterality}{view}"
+    if mode == "presentation":
+        # For presentation mode, prioritize based on view position
+        if laterality and view in ("CC", "MLO"):
+            return f"{laterality}{view}"
+    elif mode == "processing":
+        # In processing mode, handle series differently, or just return view directly
+        return view
 
     guess = guess_from_series(get_tag_str(ds, (0x0008, 0x103E)))
     return guess
@@ -148,10 +153,10 @@ def pick_center_slice(paths):
     mid = len(items) // 2  # Middle
     return items[mid][1]
 
-def process_subfolder(subfolder_path, out_root, size_max, deep, exclude_dir):
+def process_subfolder(subfolder_path, out_root, size_max, deep, exclude_dir, mode="presentation"):
     """
-    From series consisting of TOMO single slice files under 100MB,
-    copy one 'center slice' for each LCC/RCC/LMLO/RMLO representative series.
+    Process series of TOMO (single-slice) images under 100MB,
+    copy one center slice for each LCC/RCC/LMLO/RMLO representative series.
     """
     sub_name = os.path.basename(subfolder_path.rstrip(os.sep))
     tail_name = safe_tail_name(sub_name, 10)
@@ -187,8 +192,8 @@ def process_subfolder(subfolder_path, out_root, size_max, deep, exclude_dir):
             except Exception:
                 continue
 
-            # Classify view
-            cls = classify_view(ds)
+            # Classify view based on the mode (presentation or processing)
+            cls = classify_view(ds, mode)
             if cls in ACCEPT_RLMO:
                 cls = "RMLO"
             if cls not in TARGET_VIEWS:
@@ -205,14 +210,13 @@ def process_subfolder(subfolder_path, out_root, size_max, deep, exclude_dir):
 
             series_uid = get_tag_str(ds, (0x0020, 0x000E))  # SeriesInstanceUID
             if not series_uid:
-                # Skip if series identification fails
                 continue
 
             buckets[cls][series_uid].append(fpath)
 
     copied = {}
 
-    # For each view: select the series with the most slices → Copy the center slice
+    # For each view: Select series with most slices -> Copy center slice
     for view in TARGET_VIEWS:
         series_map = buckets.get(view, {})
         if not series_map:
@@ -228,8 +232,53 @@ def process_subfolder(subfolder_path, out_root, size_max, deep, exclude_dir):
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Copy one center slice for each LCC/RCC/LMLO/RMLO from TOMO (single slice) series under 100MB in each subfolder."
+        description="Copy the center slice of each representative series of TOMO images under 100MB for each view (LCC, RCC, LMLO, RMLO)."
     )
     ap.add_argument("parent_folder", help="Parent folder path")
-    ap.add_argument("--mb", type=int, default=100, help="Maximum size (MB). Default=100 (only below this size)")
-    ap.add_argument("--deep", action="store_true",
+    ap.add_argument("--mb", type=int, default=100, help="Maximum size (MB). Default=100 (only files below this size)")
+    ap.add_argument("--deep", action="store_true", help="Recursively explore all depths (default is 1-level subfolders)")
+    ap.add_argument("--out", default="_collected_center_slices_≤100MB", help="Output root folder name (default=_collected_center_slices_≤100MB)")
+    ap.add_argument("--mode", choices=["presentation", "processing"], default="presentation", help="Mode to process images (default='presentation')")
+    args = ap.parse_args()
+
+    parent = args.parent_folder
+    if not os.path.isdir(parent):
+        print(f"! Folder not found: {parent}")
+        sys.exit(1)
+
+    size_max = args.mb * 1024 * 1024
+    out_root = os.path.join(parent, args.out)
+    os.makedirs(out_root, exist_ok=True)
+
+    subfolders = [
+        os.path.join(parent, d) for d in os.listdir(parent)
+        if os.path.isdir(os.path.join(parent, d)) and os.path.join(parent, d) != out_root
+    ]
+
+    print(f"! Parent folder: {parent}")
+    print(f"! Output root: {out_root}")
+    print(f"! Target views: {', '.join(TARGET_VIEWS)} (RLMO notation normalized to RMLO)")
+    print(f"! Size constraint: ≤ {args.mb} MB")
+    print(f"! Recursive exploration: {'ON' if args.deep else 'OFF'}")
+    print(f"! Mode: {args.mode.capitalize()}\n")
+
+    grand_total = 0
+    for sf in sorted(subfolders):
+        tail, dest, copied = process_subfolder(
+            subfolder_path=sf,
+            out_root=out_root,
+            size_max=size_max,
+            deep=args.deep,
+            exclude_dir=out_root,
+            mode=args.mode
+        )
+        views_str = ", ".join(sorted(copied.keys())) if copied else "None"
+        print(f"- {os.path.basename(sf)} → {os.path.basename(dest)} : {views_str}")
+        grand_total += len(copied)
+
+    print(f"\n! Done: Total copied files = {grand_total}")
+    print(f"! Result location: {out_root}")
+    print("   (Subfolder names truncated to 10 characters, view prefixes added to filenames)")
+    
+if __name__ == "__main__":
+    main()
