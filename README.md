@@ -1,44 +1,128 @@
-This Python script is designed for processing/presentation DICOM files, specifically for extracting and copying the "center slice" of representative series from TOMO (single-slice) images, under certain size constraints (100MB or less). Here's an overview of the code's purpose and functionality:
+# TOMO Center Slice Extractor
 
-### Purpose:
+## Overview
 
-The script organizes and processes DICOM files from a set of subfolders, looking for single-slice series (typically tomography images) under 100MB in size. It identifies the relevant views (LCC, RCC, LMLO, RMLO), classifies them, and then extracts one "center slice" for each of these views (if available). The selected center slices are copied into a designated output folder, ensuring that files are uniquely named and organized.
+This Python script processes DICOM images from digital breast tomosynthesis (TOMO) studies and extracts **the center slice** from the representative series for each target mammography view:
 
-### Main Functions:
+* **LCC** – Left Cranio-Caudal
+* **RCC** – Right Cranio-Caudal
+* **LMLO** – Left Medio-Lateral Oblique
+* **RMLO** – Right Medio-Lateral Oblique
 
-1. **View Classification**:
-   The script classifies each DICOM file based on its "view" (e.g., LCC, RCC, LMLO, RMLO). It uses information such as laterality, view position, and series description to determine the appropriate classification.
+The script:
 
-2. **Slice Selection**:
-   It picks the central slice from a series of DICOM files by sorting them based on their slice order and then selecting the middle slice.
+* Works with both **presentation** and **processing** modes.
+* Ignores multi-frame DICOMs.
+* Skips files larger than a given size limit (default: 100 MB).
+* Handles irregular view name formats (e.g., `RLMO` → `RMLO`).
+* Ensures safe file names and avoids overwriting.
 
-3. **Unique File Handling**:
-   When copying files, the script ensures that the target directory does not already contain a file with the same name. If there is a conflict, it appends a numerical suffix to make the file name unique.
+---
 
-4. **Recursion and Directory Traversal**:
-   The script can recursively scan subdirectories to process files at any depth, depending on the user’s preference. It also skips directories that are excluded from the process.
+## Features
 
-5. **File Size Constraint**:
-   The script only processes files that are under the specified size limit (default is 100MB). If a file exceeds this size, it is ignored.
+* **Automatic view classification**
+  Detects view type from DICOM tags `(0020,0060)`, `(0020,0062)`, `(0018,5101)` and, if needed, from `(0008,103E)` *Series Description*.
 
-6. **Output Organization**:
-   The processed files are organized into output folders, each named based on the first 10 characters of the subfolder’s name. The center slices are copied with a prefix corresponding to the view (e.g., "LCC\_", "RCC\_").
+* **Representative series selection**
+  For each view, the script selects the series with the **most slices**.
 
-### How It Works:
+* **Center slice extraction**
+  Picks the slice in the middle of the series based on:
 
-* **Input**: The script takes a parent folder containing multiple subfolders with DICOM files. Users can specify the maximum file size, enable deep recursion for scanning all subfolder levels, and specify an output folder for the results.
-* **Processing**: It processes each subfolder, scanning for DICOM files, classifying them into views (LCC, RCC, LMLO, RMLO), and selecting the center slice from the largest series. It then copies the selected slices to the output directory.
-* **Output**: After processing all subfolders, the script outputs a summary, including the number of copied files and their location.
+  1. `InstanceNumber (0020,0013)`
+  2. `ImagePositionPatient (0020,0032)` Z-coordinate
+  3. Fallback: SOPInstanceUID string comparison
 
-### Key Features:
+* **Safe output structure**
+  Output subfolders have sanitized names (last 10 characters, special characters replaced).
+  Filenames are prefixed with their view type (e.g., `LCC_filename.dcm`).
 
-* Recursively scans subfolders for DICOM files.
-* Classifies DICOM files based on view type (LCC, RCC, LMLO, RMLO).
-* Extracts and copies the "center slice" from each view, if available.
-* Ensures file uniqueness by renaming if a conflict occurs.
-* Filters out files larger than the specified size (100MB by default).
-* Provides detailed output on the processed folders and the number of copied slices.
+---
 
-### Typical Use Case:
+## Requirements
 
-This script would be useful in a medical imaging workflow where multiple DICOM files representing different views and slices of a series are stored in subdirectories. The goal is to organize and consolidate the "center slice" of key views (LCC, RCC, LMLO, RMLO) for further processing, analysis, or archiving, while ensuring that files over a certain size are excluded and the output is neatly organized.
+* Python 3.7+
+* [pydicom](https://pydicom.github.io/)
+
+Install dependencies:
+
+```bash
+pip install pydicom
+```
+
+---
+
+## Usage
+
+```bash
+python tomo_center_slice.py /path/to/parent_folder [options]
+```
+
+### Positional arguments:
+
+* **`parent_folder`**
+  The parent folder containing subfolders with DICOM files.
+
+### Options:
+
+| Option                             | Description                                                             | Default                           |
+| ---------------------------------- | ----------------------------------------------------------------------- | --------------------------------- |
+| `--mb N`                           | Maximum file size in MB to include. Files larger than this are skipped. | 100                               |
+| `--deep`                           | Recursively search all subfolders.                                      | Off                               |
+| `--out NAME`                       | Name for output root folder.                                            | `_collected_center_slices_≤100MB` |
+| `--mode {presentation,processing}` | Classification mode.                                                    | `presentation`                    |
+
+---
+
+## Example
+
+```bash
+python tomo_center_slice.py /data/TOMO --mb 50 --deep --out extracted_slices --mode presentation
+```
+
+**Output:**
+
+```
+! Parent folder: /data/TOMO
+! Output root: /data/TOMO/extracted_slices
+! Target views: LCC, RCC, LMLO, RMLO (RLMO notation normalized to RMLO)
+! Size constraint: ≤ 50 MB
+! Recursive exploration: ON
+! Mode: Presentation
+
+- Case001 → Case001 : LCC, RCC, LMLO, RMLO
+- Case002 → Case002 : LCC, RMLO
+...
+
+! Done: Total copied files = 6
+! Result location: /data/TOMO/extracted_slices
+   (Subfolder names truncated to 10 characters, view prefixes added to filenames)
+```
+
+---
+
+## Output Structure
+
+```
+output_root/
+    <shortened_case_folder>/
+        LCC_<filename>.dcm
+        RCC_<filename>.dcm
+        LMLO_<filename>.dcm
+        RMLO_<filename>.dcm
+```
+
+---
+
+## Notes
+
+* Only **single-slice TOMO** images are included. Multi-frame DICOMs are excluded.
+* File names are guaranteed to be safe for all OSes.
+* If two files have the same name, a numeric suffix will be added.
+
+---
+
+## License
+
+This project is licensed under the MIT License.
